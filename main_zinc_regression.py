@@ -17,6 +17,8 @@ import torch
 
 import torch.optim as optim
 from torch.utils.data import DataLoader
+# import torch.autograd.profiler as profiler
+#from torch.profiler import profile, ProfilerActivity
 
 from tqdm import tqdm
 
@@ -27,6 +29,7 @@ from tqdm import tqdm
 from transformer_net import GraphiTNet
 from data import GraphDataset
 from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmbeddings
+# from compute_gckn_pe import OneHotEdges, GCKNEncoding
 
 
 """
@@ -53,6 +56,7 @@ from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
+ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -68,6 +72,37 @@ def view_model_param(model, MODEL_NAME):
     print('MODEL/Total parameters:', MODEL_NAME, total_param)
     return total_param
 
+"""
+    GCKN CODE
+"""
+
+def precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir):
+    n_tags = 28
+    if node_pe_params['encode_edges']:
+        num_edge_features = 3
+        train_dset, val_dset, test_dset = (
+            ZINC(ZINC_PATH, subset=True, split=split, transform=OneHotEdges(num_edge_features)) for split in ['train', 'val', 'test']
+            )
+    else:
+        num_edge_features = 0
+        train_dset, val_dset, test_dset = (
+            ZINC(ZINC_PATH, subset=True, split=split) for split in ['train', 'val', 'test']
+            )
+    gckn_pos_enc_path = '{}/zinc_gckn_{}_{}_{}_{}_{}_{}_{}.pkl'.format(
+        cache_dir,
+        node_pe_params['dim'], node_pe_params['path'], node_pe_params['sigma'],
+        node_pe_params['pooling'], node_pe_params['aggregation'],
+        node_pe_params['normalize'], node_pe_params['encode_edges'])
+    gckn_pos_encoder = GCKNEncoding(
+        gckn_pos_enc_path, node_pe_params['dim'], node_pe_params['path'],
+        sigma=node_pe_params['sigma'], pooling=node_pe_params['pooling'], aggregation=node_pe_params['aggregation'],
+        normalize=node_pe_params['normalize'], encode_edges=node_pe_params['encode_edges'], dim_edges=num_edge_features)
+    print('GCKN Position encoding')
+    gckn_pos_enc_values = gckn_pos_encoder.apply_to(
+        train_dset, val_dset + test_dset, batch_size=64, n_tags=n_tags)
+    NodePE = NodePositionalEmbeddings['gckn'](gckn_pos_enc_values, embedding_dimension=gckn_pos_encoder.pos_enc_dim)
+    del gckn_pos_encoder
+    return NodePE
 
 """
     TRAINING CODE
@@ -83,6 +118,8 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     valset = GraphDataset(dataset['val'])
     testset = GraphDataset(dataset['test'])
 
+    root_log_dir, root_ckpt_dir, write_file_name, write_config_file, cache_dir = dirs
+
     # Add virtual node connected to everyone
     if net_params['virtual_node'] == True:
         net_params['num_atom_type'] += 1
@@ -91,19 +128,24 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             dset.add_virtual_nodes(x_fill=net_params['num_atom_type'], edge_attr_fill=net_params['num_bond_type'])
 
     # Initialize node positional embeddings
+    print('Initializing node positional embeddings')
     if net_params['use_node_pe'] in ['concat', 'sum', 'product']:
         node_pe_params = net_params['node_pe_params']
         if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
             print('{} is not a recognized node positional embedding, defaulting to none')
             net_params['use_node_pe'] = False
         else:
-            NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            if node_pe_params['node_pe'] == 'gckn':
+                NodePE = precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir)
+            else:
+                NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
             net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
             for dset in [trainset, valset, testset]:
                 dset.compute_node_pe(NodePE)
     else:
         net_params['use_node_pe'] = False
     # Pre-compute attention relative positional embeddings
+    print('Initializing relative positional embeddings')
     if net_params['use_attention_pe']:
         attention_pe_params = net_params['attention_pe_params']
         if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
@@ -113,11 +155,22 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
             for dset in [trainset, valset, testset]:
                 dset.compute_attention_pe(AttentionPE)
-            net_params['learnable_attention_pe'] = (attention_pe_params['attention_pe'] in ['plural_RW', 'edge_RW'])
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
-            net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW', 'progressive_diffusion']
+            if net_params['attention_pe_dim'] > 1:
+                net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']
+                # Multiple relative attention matrices, one must choose a way to deal with last dimension
+                if net_params['multi_attention_pe'] not in ["per_layer", "per_head", "aggregate"]:
+                    raise ValueError('''Attention PE is multi-dimensional, `multi_attention_pe` must be
+                        one of ["per_layer", "per_head", "aggregate"]''')
+                if net_params['multi_attention_pe'] == "per_layer" and net_params['L'] > net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_layer", so `attention_pe` last dimension ({})
+                        must be at least equal to the number of layers ({})'''.format(net_params['attention_pe_dim'], net_params['L']))
+                if net_params['multi_attention_pe'] == "per_head" and net_params['n_heads'] != net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_head", so `attention_pe` last dimension ({})
+                        must match the number of attention heads ({})'''.format(net_params['attention_pe_dim'], net_params['n_heads']))
+            else:
+                net_params['multi_attention_pe'] = None
         
-    root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
        
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
@@ -148,11 +201,32 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
+    # if params['warmup'] == False:
+    #     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+    #                                                  factor=params['lr_reduce_factor'],
+    #                                                  patience=params['lr_schedule_patience'],
+    #                                                  verbose=True)
+    #     lr_scheduler = None
+    # else:
+    #     lr_steps = (params['init_lr'] - 1e-6) / params['warmup']
+    #     decay_factor = params['init_lr'] * params['warmup'] ** .5
+    #     def lr_scheduler(s):
+    #         if s < params['warmup']:
+    #             lr = 1e-6 + s * lr_steps
+    #         else:
+    #             lr = decay_factor * s ** -.5
+    #         return lr
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
                                                      factor=params['lr_reduce_factor'],
                                                      patience=params['lr_schedule_patience'],
                                                      verbose=True)
-    
+    def lr_scheduler(s):
+        if s < params['warmup']:
+            lr = 1e-6 + s * (params['init_lr'] - 1e-6) / params['warmup']
+        else:
+            lr = params['init_lr']
+        return lr
+
     epoch_train_losses, epoch_val_losses = [], []
     epoch_train_MAEs, epoch_val_MAEs = [], [] 
     
@@ -166,13 +240,16 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     # At any point you can hit Ctrl + C to break out of training early.
     try:
         with tqdm(range(params['epochs'])) as t:
+            # with profile(
+            #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            #         schedule=torch.profiler.schedule(wait=1, warmup=1, active=2)) as prof:
             for epoch in t:
 
                 t.set_description('Epoch %d' % epoch)
 
                 start = time.time()
-
-                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch)
+                # with profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
+                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch, lr_scheduler, warmup=params['warmup'])
                 epoch_val_loss, epoch_val_mae, __ = evaluate_network(model, device, val_loader, epoch)
                 epoch_test_loss, epoch_test_mae, __ = evaluate_network(model, device, test_loader, epoch)
                 del __
@@ -212,18 +289,20 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                     if epoch_nb < epoch-1:
                         os.remove(file)
 
+                # if params['warmup'] == False:
                 scheduler.step(epoch_val_loss)
-
                 if optimizer.param_groups[0]['lr'] < params['min_lr']:
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break
-                
+
                 # Stop training after params['max_time'] hours
                 if time.time()-t0 > params['max_time']*3600:
                     print('-' * 89)
                     print("Max_time for training elapsed {:.2f} hours, so stopping".format(params['max_time']))
                     break
-                
+
+                    # prof.step()
+
     except KeyboardInterrupt:
         print('-' * 89)
         print('Exiting from training early because of KeyboardInterrupt')
@@ -231,11 +310,16 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
     train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
     
+    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
+    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     print("Test MAE: {:.4f}".format(test_mae))
     print("Train MAE: {:.4f}".format(train_mae))
     print("Convergence Time (Epochs): {:.4f}".format(epoch))
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
+    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
+    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     
     if save_run_tensorboard:
         writer.close()
@@ -309,14 +393,9 @@ def main():
     else:
         DATASET_NAME = config['dataset']
     # dataset = LoadData(DATASET_NAME)
-    zinc_dataset_train = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='train')#, transform=compute_pe)
-    zinc_dataset_val = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='val')#, transform=compute_pe)
-    zinc_dataset_test = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='test')#, transform=compute_pe)
     dataset = {
-        'train': zinc_dataset_train,
-        'val': zinc_dataset_val,
-        'test': zinc_dataset_test
-        }
+        split: ZINC(root=ZINC_PATH, subset=True, split=split) for split in ['train', 'val', 'test']
+    }
     if args.out_dir is not None:
         out_dir = args.out_dir
     else:
@@ -387,8 +466,8 @@ def main():
     # FIXME: move this to data.py
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
-    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
+    net_params['num_atom_type'] = len(np.unique(dataset['train'].data.x))
+    net_params['num_bond_type'] = len(np.unique(dataset['train'].data.edge_attr))
     net_params['n_classes'] = 1
 
     experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
@@ -397,14 +476,17 @@ def main():
     root_ckpt_dir = out_dir + 'checkpoints/' + experiment_name
     write_file_name = out_dir + 'results/result_' + experiment_name
     write_config_file = out_dir + 'configs/config_' + experiment_name
-    viz_dir = out_dir + 'viz/' + experiment_name
-    dirs = root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir
+    cache_dir = out_dir + 'cache/'
+    dirs = root_log_dir, root_ckpt_dir, write_file_name, write_config_file, cache_dir
 
     if not os.path.exists(out_dir + 'results'):
         os.makedirs(out_dir + 'results')
         
     if not os.path.exists(out_dir + 'configs'):
         os.makedirs(out_dir + 'configs')
+    
+    if not os.path.exists(out_dir + 'cache'):
+        os.makedirs(out_dir + 'cache')
 
     # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)

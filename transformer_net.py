@@ -73,8 +73,7 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             self.pos_enc_dim = net_params['pos_enc_dim']
         self.update_pos_enc = net_params['update_pos_enc']
-        self.use_attention_pe = net_params['use_attention_pe']
-        self.progressive_attention = net_params['progressive_attention']
+        self.progressive_attention = net_params['use_attention_pe'] and net_params['multi_attention_pe'] == 'per_layer'
         
         GT_layers = net_params['L']
         GT_hidden_dim = net_params['hidden_dim']
@@ -89,7 +88,7 @@ class GraphiTNet(nn.Module):
         
         self.layer_norm = net_params['layer_norm']
         if self.layer_norm:
-            self.layer_norm_h = nn.LayerNorm(GT_out_dim)
+            self.layer_norm_h = nn.LayerNorm(GT_out_dim, elementwise_affine=False)
 
         self.use_edge_features = net_params['use_edge_features']
 
@@ -99,18 +98,19 @@ class GraphiTNet(nn.Module):
             'dropout',
             'layer_norm',
             'batch_norm',
+            'instance_norm',
             'residual',
             'use_node_pe',
             'use_attention_pe',
             'attention_pe_dim',
-            'learnable_attention_pe',
+            'multi_attention_pe',
             'use_edge_features',
             'update_edge_features',
             'update_pos_enc',
             'normalize_degree',
             'feedforward',
             ]:
-            layer_params[param] = net_params[param]
+            layer_params[param] = net_params.get(param, None)
         
         if self.use_node_pe:
             self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
@@ -127,10 +127,13 @@ class GraphiTNet(nn.Module):
             else:
                 self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
         
+
         self.layers = nn.ModuleList([
             GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
             ])
-        layer_params['use_attention_pe'] = False # Last layer with full vanilla attention
+        if net_params['last_layer_full_attention']:
+            # Last layer with full vanilla attention (no kernel)
+            layer_params['use_attention_pe'] = False 
         layer_params['update_edge_features'] = False
         self.layers.append(
             GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
@@ -158,21 +161,18 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             p = self.embedding_p(p)
 
-        k_RW_0 = k_RW
         for i, conv in enumerate(self.layers):
             # Concatenate/Add/Multiply h and p for first layer (or all layers)
             # if (i == 0) or self.update_pos_enc:
             # # if True:
             #     h = combine_h_p(h, p, operation=self.use_node_pe)
-            h, p, e = conv(h, p, e, k_RW=k_RW, mask=mask, adj=adj)
-            # h, p, e = conv(h, p, e, k_RW=None, mask=None, adj=None)
-            # This part should probably be moved to the DataLoader:
-            if self.use_attention_pe and self.progressive_attention:
-                k_RW = torch.matmul(k_RW, k_RW_0)
+            k_RW_i = k_RW[:, :, :, i] if self.progressive_attention else k_RW
+            h, p, e = conv(h, p, e, k_RW=k_RW_i, mask=mask, adj=adj)
 
         if self.use_node_pe:
             p = self.p_out(p)
             # Concat h and p before classification
+            # FIXME: hp is not used for now
             hp = self.Whp(torch.cat((h, p), dim=-1))
 
         # readout

@@ -7,26 +7,26 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_yessoftmax/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_gckn/",
     
     "params": {
         "seed": 41,
         "epochs": 1000,
         "batch_size": 32,
-        "init_lr": 0.0007,
+        "init_lr": 0.0005,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
         "min_lr": 1e-5,
         "weight_decay": 0,
         "print_epoch_interval": 5,
-        "warmup": 0,
+        "warmup": 2000,
         "max_time": 24
     },
     
     "net_params": {
         "double_attention": false,
 
-        "L": 10,
+        "L": 5,
         "hidden_dim": 64,
         "out_dim": 64,
         "n_heads": 8,
@@ -43,22 +43,28 @@
         "use_node_pe": "sum",
         "update_pos_enc": false,
         "node_pe_params": {
-            "node_pe": "rand_walk",
-            "p_steps": 16
+            "node_pe": "gckn",
+            "dim": 64,
+            "path": 8,
+            "sigma": 0.6,
+            "pooling": "sum",
+            "aggregation": true,
+            "normalize": true,
+            "encode_edges": true
         },
 
         "use_attention_pe": true,
         "attention_pe_params": {
             "attention_pe": "rand_walk",
-            "multi_attention_pe": "per_layer",
+            "multi_attention_pe": "aggregate",
             "zero_diag": "false",
             "p_steps": 16,
-            "beta": 0.25
+            "beta": 0.5
         },
         "last_layer_full_attention": true,
         "normalize_degree": true,
         
-        "use_edge_features": true,
+        "use_edge_features": false,
         "update_edge_features": false,
 
         "virtual_node": false
