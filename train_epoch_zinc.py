@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import torch.profiler as profiler
+# import torch.profiler as profiler
 
 
 def MAE(scores, targets):
@@ -21,6 +21,7 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
     nb_data = 0
     gpu_mem = 0
     for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
+        # import pdb; pdb.set_trace()
         iteration = epoch * len(data_loader) + iter
         if iteration < warmup:
             for param_group in optimizer.param_groups:

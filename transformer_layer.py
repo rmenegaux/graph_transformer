@@ -24,13 +24,12 @@ def combine_h_p(h, p, operation='sum'):
 """
 
 class MultiHeadAttentionLayer(nn.Module):
-    def __init__(self, in_dim, in_dim_edges, out_dim, num_heads, double_attention=False,
+    def __init__(self, in_dim, in_dim_edges, out_dim, num_heads,
                  use_bias=False, use_attention_pe=True, use_edge_features=False):
         super().__init__()
         
         self.out_dim = out_dim
         self.num_heads = num_heads
-        self.double_attention = double_attention
         self.use_edge_features = use_edge_features
         self.use_attention_pe = use_attention_pe
         
@@ -38,11 +37,8 @@ class MultiHeadAttentionLayer(nn.Module):
         self.K = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
         if self.use_edge_features:
             self.E = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
-
-        if self.double_attention:
-            self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
-            self.K_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
-            self.E_2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
+            # self.E2 = nn.Linear(in_dim_edges, 1, bias=use_bias)
+            # self.E2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
 
         self.V = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
 
@@ -66,58 +62,44 @@ class MultiHeadAttentionLayer(nn.Module):
         scaling = float(self.out_dim) ** -0.5
         K_h = K_h * scaling
 
-        if self.double_attention:
-            Q_2h = self.Q_2(h) # [n_batch, num_nodes, out_dim * num_heads]
-            K_2h = self.K_2(h)
-            K_2h = K_2h * scaling
-
-            Q_2h = Q_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-            K_2h = K_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-
         if self.use_edge_features:
 
             E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
-            E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
+            E = E.reshape(n_batch, num_nodes * num_nodes, self.num_heads, self.out_dim).transpose(1,2)
+            E = E.reshape(n_batch, self.num_heads, num_nodes, num_nodes, self.out_dim)
 
-            if self.double_attention:
-                edge_filter = adj.view(n_batch, num_nodes, num_nodes, 1, 1)
-    
-                E = E * edge_filter
-                scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
+            # E2 = self.E2(e)
+            # E2 = E2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
+            # E = torch.exp(E.clamp(-5, 5))
 
-                E_2 = self.E_2(e)
-                E_2 = E_2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
-                E_2 = E_2 * (~edge_filter)
-                scores = scores + torch.einsum('bihk,bjhk,bijhk->bhij', Q_2h, K_2h, E_2)
-            else:
-                # attention(i, j) = sum(Q_i * K_j * E_ij)
-                scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
+            # attention(i, j) = sum(Q_i * K_j * E_ij)
+            # scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E2).unsqueeze(-1)
+            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h).unsqueeze(-1)
+            scores = scores + E
         else:
-            if self.double_attention:
-                edge_filter = adj.view(n_batch, num_nodes, num_nodes, 1, 1)
-                scores_1 = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
-                scores_2 = torch.einsum('bihk,bjhk->bhij', Q_2h, K_2h)
-                scores = edge_filter * scores_1 + (~edge_filter) * scores_2
-            else:
-                # attention(i, j) = sum(Q_i * K_j)
-                scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
+            # attention(i, j) = sum(Q_i * K_j)
+            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
 
         # Apply exponential and clamp for numerical stability
-        # scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
-        scores = torch.exp(scores - scores.amax(dim=(-2, -1), keepdim=True))
+        scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
+        # scores = torch.exp(scores - scores.amax(dim=(-2, -1), keepdim=True))
 
         # Make sure attention scores for padding are 0
         if mask is not None:
-            scores = scores * mask.view(-1, 1, num_nodes, 1) * mask.view(-1, 1, 1, num_nodes)
+            scores = scores * mask.view(-1, 1, num_nodes, 1, 1) * mask.view(-1, 1, 1, num_nodes, 1)
 
         if self.use_attention_pe:
             # Introduce new dimension for the different heads
             # k_RW = k_RW.unsqueeze(1)
-            scores = scores * k_RW
+            pass
+            # scores = scores * k_RW
         
-        softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
+        # softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
+        softmax_denom = scores.sum(-2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
 
-        h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
+        # h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
+        # h = torch.einsum('bhij,bhjk,bijhk->bhik', scores, V_h, E)
+        h = torch.einsum('bhijk,bhjk->bhik', scores, V_h)
         # Normalize scores
         h = h / softmax_denom
         # Concatenate attention heads
@@ -153,16 +135,16 @@ class GraphiT_GT_Layer(nn.Module):
         self.update_pos_enc = layer_params['update_pos_enc']
 
         attention_params = {
-            param: layer_params[param] for param in ['double_attention', 'use_bias', 'use_attention_pe', 'use_edge_features']
+            param: layer_params[param] for param in ['use_bias', 'use_attention_pe', 'use_edge_features']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
         in_dim_h = in_dim*2 if (self.use_node_pe == 'concat') else in_dim
         self.attention_h = MultiHeadAttentionLayer(in_dim_h, in_dim, out_dim//num_heads, num_heads, **attention_params)
-        self.O_h = nn.Linear(out_dim, out_dim)
+        self.O_h = nn.Linear(out_dim, out_dim, bias=False)
         
         if self.update_pos_enc:
             self.attention_p = MultiHeadAttentionLayer(in_dim, in_dim, out_dim//num_heads, num_heads, **attention_params)
-            self.O_p = nn.Linear(out_dim, out_dim)
+            self.O_p = nn.Linear(out_dim, out_dim, bias=False)
         
         self.multi_attention_pe = layer_params['multi_attention_pe']
         self.learnable_attention_pe = (self.use_attention_pe and self.multi_attention_pe == 'aggregate')
@@ -182,8 +164,8 @@ class GraphiT_GT_Layer(nn.Module):
         
         # FFN for h
         if self.feedforward:
-            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2)
-            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim)
+            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2, bias=False)
+            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim, bias=False)
 
         if self.layer_norm:
             self.layer_norm2_h = nn.LayerNorm(out_dim)
@@ -275,7 +257,7 @@ class GraphiT_GT_Layer(nn.Module):
         h_in1 = h # for first residual connection
         
         # [START] For calculation of h -----------------------------------------------------------------
-        h = combine_h_p(h, p, operation=self.use_node_pe)
+        # h = combine_h_p(h, p, operation=self.use_node_pe)
 
         if self.layer_norm:
             h = self.layer_norm1_h(h)
@@ -320,6 +302,9 @@ class GraphiT_GT_Layer(nn.Module):
         if self.batch_norm:
             # Apparently have to do this double transpose for 3D input
             h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+            # Set padding back to zero
+            if mask is not None:
+                h = mask.unsqueeze(-1) * h
             #h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
@@ -328,6 +313,9 @@ class GraphiT_GT_Layer(nn.Module):
 
         if self.feedforward:
             h = self.feed_forward_block(h, mask=mask)
+            # Set padding back to zero
+            if mask is not None:
+                h = mask.unsqueeze(-1) * h
                 
         if self.use_node_pe and self.update_pos_enc:
             p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)

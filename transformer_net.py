@@ -51,9 +51,12 @@ class BondEncoder(torch.nn.Module):
 
         return bond_embedding
 
-def global_pooling(x, readout='mean'):
+def global_pooling(x, readout='mean', mask=None):
     if readout == 'mean':
-        return x.mean(dim=1)
+        if mask is not None:
+            return x.sum(dim=1) / mask.sum(dim=1)
+        else:
+            return x.mean(dim=1)
     elif readout == 'max':
         return x.max(dim=1)
     elif readout == 'sum':
@@ -94,7 +97,6 @@ class GraphiTNet(nn.Module):
 
         layer_params = {'use_bias': False}
         for param in [
-            'double_attention',
             'dropout',
             'layer_norm',
             'batch_norm',
@@ -119,13 +121,14 @@ class GraphiTNet(nn.Module):
         if isinstance(num_atom_type, list):
             self.embedding_h = AtomEncoder(GT_hidden_dim, num_atom_type)
         else:
-            self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
+            self.embedding_h = nn.Embedding(num_atom_type + 1, GT_hidden_dim, padding_idx=0)
         
         if self.use_edge_features:
             if isinstance(num_bond_type, list):
                 self.embedding_e = BondEncoder(GT_hidden_dim, num_bond_type)
             else:
-                self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
+                self.embedding_e = nn.Embedding(num_bond_type + 2, GT_hidden_dim//2, padding_idx=0)
+                self.positional_embedding_e = nn.Linear(net_params['attention_pe_dim'], GT_hidden_dim//2, bias=False)
         
 
         self.layers = nn.ModuleList([
@@ -155,11 +158,16 @@ class GraphiTNet(nn.Module):
         # Edge embedding
         if self.use_edge_features:
             e = self.embedding_e(e)
+            # Combine edge type and edge positions
+            # e = e + self.positional_embedding_e(k_RW)
+            e = torch.cat((e, self.positional_embedding_e(k_RW)), dim=-1)
 
         h = self.in_feat_dropout(h)
         
         if self.use_node_pe:
             p = self.embedding_p(p)
+            p = mask.unsqueeze(-1) * p
+            h = combine_h_p(h, p, operation=self.use_node_pe)
 
         for i, conv in enumerate(self.layers):
             # Concatenate/Add/Multiply h and p for first layer (or all layers)
@@ -176,7 +184,7 @@ class GraphiTNet(nn.Module):
             hp = self.Whp(torch.cat((h, p), dim=-1))
 
         # readout
-        h = global_pooling(h, readout=self.readout)
+        h = global_pooling(h, readout=self.readout, mask=mask.unsqueeze(-1))
         if self.layer_norm:
             h = self.layer_norm_h(h)
         

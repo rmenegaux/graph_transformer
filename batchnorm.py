@@ -153,4 +153,5 @@ class CustomBatchNorm1d(nn.BatchNorm1d):
                 input = input * self.weight[None, :, None, None] + self.bias[None, :, None, None]
             else:
                 input = input * self.weight[None, :, None, None]
+        
         return input

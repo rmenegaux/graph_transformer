@@ -310,8 +310,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
     train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
     
-    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
-    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     print("Test MAE: {:.4f}".format(test_mae))
     print("Train MAE: {:.4f}".format(train_mae))
     print("Convergence Time (Epochs): {:.4f}".format(epoch))

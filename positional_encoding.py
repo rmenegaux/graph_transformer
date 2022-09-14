@@ -5,10 +5,13 @@ import torch_geometric.utils as utils
 from scipy.linalg import expm
 
 
-def compute_RW_from_adjacency(A):
+def compute_RW_from_adjacency(A, add_self_loops=True):
     '''
     Returns the random walk transition matrix for an adjacency matrix A
     '''
+    if add_self_loops:
+        I = torch.eye(*A.size(), out=torch.empty_like(A))
+        A = I + A
     D = A.sum(dim=-1, keepdim=True)
     D[D == 0] = 1 # Prevent any division by 0 errors
     return A / D # A D^-1
@@ -51,8 +54,8 @@ class RandomWalkNodePE(object):
         node_pe[:, 0] = RW.diagonal()
         for power in range(self.p_steps-1):
             RW_power = RW @ RW_power
-            node_pe[:, power + 1] = RW_power.diagonal()
-        return node_pe
+            node_pe[:, power + 1] = RW_power.diagonal() 
+        return (node_pe - 1/num_nodes) * float(num_nodes)**0.5
 
 class IterableNodePE(object):
     '''
@@ -82,7 +85,7 @@ class BaseAttentionPE(object):
 
     def __call__(self, graph):
         K = self.compute_attention_pe(graph)
-        if self.zero_diag:
+        if self.zero_diag == True:
             I = torch.eye(*K.size()[:1])
             if K.ndim == 3:
                 I = I.unsqueeze(-1)
@@ -164,7 +167,7 @@ class MultiRWAttentionPE(BaseAttentionPE):
         self.beta = parameters.get('beta', 0.25)
         super().__init__(**parameters)
     
-    def compute_attention_pe(self, graph):
+    def compute_attention_pe(self, graph, standardize=True):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         k_RW_0 = RW_kernel_from_adjacency(A, beta=self.beta, p_steps=1)
         k_RW_power = k_RW_0
@@ -173,7 +176,11 @@ class MultiRWAttentionPE(BaseAttentionPE):
             for _ in range(self.stride):
                 k_RW_power = k_RW_power @ k_RW_0
             k_RW_all_powers.append(k_RW_power)
-        return torch.stack(k_RW_all_powers, dim=-1)
+        attention_pe = torch.stack(k_RW_all_powers, dim=-1)
+        if standardize:
+            num_nodes = A.size(0)
+            attention_pe = (attention_pe - 1/num_nodes) * float(num_nodes)**0.5
+        return attention_pe
 
     def get_dimension(self):
         return self.p_steps
