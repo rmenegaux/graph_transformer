@@ -65,17 +65,18 @@ class MultiHeadAttentionLayer(nn.Module):
         if self.use_edge_features:
 
             E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
-            E = E.reshape(n_batch, num_nodes * num_nodes, self.num_heads, self.out_dim).transpose(1,2)
-            E = E.reshape(n_batch, self.num_heads, num_nodes, num_nodes, self.out_dim)
+            E = E.reshape(n_batch, num_nodes * num_nodes, self.num_heads, self.out_dim)#.transpose(1,2)
+            # E = E.reshape(n_batch, self.num_heads, num_nodes, num_nodes, self.out_dim)
+            E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
 
             # E2 = self.E2(e)
             # E2 = E2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
             # E = torch.exp(E.clamp(-5, 5))
 
             # attention(i, j) = sum(Q_i * K_j * E_ij)
-            # scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E2).unsqueeze(-1)
-            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h).unsqueeze(-1)
-            scores = scores + E
+            scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)#.unsqueeze(-1)
+            # scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h).unsqueeze(-1)
+            # scores = scores + E
         else:
             # attention(i, j) = sum(Q_i * K_j)
             scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
@@ -86,20 +87,20 @@ class MultiHeadAttentionLayer(nn.Module):
 
         # Make sure attention scores for padding are 0
         if mask is not None:
-            scores = scores * mask.view(-1, 1, num_nodes, 1, 1) * mask.view(-1, 1, 1, num_nodes, 1)
+            scores = scores * mask.view(-1, 1, num_nodes, 1) * mask.view(-1, 1, 1, num_nodes)
 
         if self.use_attention_pe:
             # Introduce new dimension for the different heads
             # k_RW = k_RW.unsqueeze(1)
-            pass
-            # scores = scores * k_RW
+            # pass
+            scores = scores * k_RW
         
-        # softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
-        softmax_denom = scores.sum(-2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
+        softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
+        # softmax_denom = scores.sum(-2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
 
-        # h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
+        h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
         # h = torch.einsum('bhij,bhjk,bijhk->bhik', scores, V_h, E)
-        h = torch.einsum('bhijk,bhjk->bhik', scores, V_h)
+        # h = torch.einsum('bhijk,bhjk->bhik', scores, V_h)
         # Normalize scores
         h = h / softmax_denom
         # Concatenate attention heads
@@ -258,6 +259,7 @@ class GraphiT_GT_Layer(nn.Module):
         
         # [START] For calculation of h -----------------------------------------------------------------
         # h = combine_h_p(h, p, operation=self.use_node_pe)
+        # h = h + p
 
         if self.layer_norm:
             h = self.layer_norm1_h(h)

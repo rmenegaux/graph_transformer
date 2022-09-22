@@ -167,7 +167,7 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             p = self.embedding_p(p)
             p = mask.unsqueeze(-1) * p
-            h = combine_h_p(h, p, operation=self.use_node_pe)
+            h = h + p
 
         for i, conv in enumerate(self.layers):
             # Concatenate/Add/Multiply h and p for first layer (or all layers)

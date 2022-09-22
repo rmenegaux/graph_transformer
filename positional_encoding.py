@@ -5,7 +5,7 @@ import torch_geometric.utils as utils
 from scipy.linalg import expm
 
 
-def compute_RW_from_adjacency(A, add_self_loops=True):
+def compute_RW_from_adjacency(A, add_self_loops=False):
     '''
     Returns the random walk transition matrix for an adjacency matrix A
     '''
@@ -41,11 +41,23 @@ class RandomWalkNodePE(object):
     '''
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
+        # Keep track of statistics
+        self.sum_ = 0
+        self.sum_squares_ = 0
+        self.num_nodes_ = 0
 
     def get_embedding_dimension(self):
         return self.p_steps
 
-    def __call__(self, graph):
+    def get_statistics(self):
+        '''
+        Return mean and standard deviation of positional embeddings computed with `update_stats=True`
+        '''
+        mean = self.sum_ / self.num_nodes_
+        var = self.sum_squares_ / self.num_nodes_ - mean**2
+        return mean, torch.sqrt(var)
+
+    def __call__(self, graph, update_stats=True):
         num_nodes = len(graph.x)
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         RW = compute_RW_from_adjacency(A)
@@ -54,8 +66,13 @@ class RandomWalkNodePE(object):
         node_pe[:, 0] = RW.diagonal()
         for power in range(self.p_steps-1):
             RW_power = RW @ RW_power
-            node_pe[:, power + 1] = RW_power.diagonal() 
-        return (node_pe - 1/num_nodes) * float(num_nodes)**0.5
+            node_pe[:, power + 1] = RW_power.diagonal()
+        if update_stats:
+            self.num_nodes_ += num_nodes
+            self.sum_ += node_pe.sum(0)
+            self.sum_squares_ += (node_pe**2).sum(0)
+
+        return node_pe
 
 class IterableNodePE(object):
     '''
@@ -167,7 +184,7 @@ class MultiRWAttentionPE(BaseAttentionPE):
         self.beta = parameters.get('beta', 0.25)
         super().__init__(**parameters)
     
-    def compute_attention_pe(self, graph, standardize=True):
+    def compute_attention_pe(self, graph):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         k_RW_0 = RW_kernel_from_adjacency(A, beta=self.beta, p_steps=1)
         k_RW_power = k_RW_0
@@ -177,9 +194,6 @@ class MultiRWAttentionPE(BaseAttentionPE):
                 k_RW_power = k_RW_power @ k_RW_0
             k_RW_all_powers.append(k_RW_power)
         attention_pe = torch.stack(k_RW_all_powers, dim=-1)
-        if standardize:
-            num_nodes = A.size(0)
-            attention_pe = (attention_pe - 1/num_nodes) * float(num_nodes)**0.5
         return attention_pe
 
     def get_dimension(self):

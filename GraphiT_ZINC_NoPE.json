@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+E_lr7_stdPE/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QKE_lr7_meanpool_newstd_reinject/",
     
     "params": {
         "seed": 41,

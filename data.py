@@ -21,12 +21,17 @@ class GraphDataset(object):
     def __getitem__(self, index):
         return self.dataset[index]
 
-    def compute_node_pe(self, node_pe):
+    def compute_node_pe(self, node_pe, standardize=True, update_stats=True):
         '''
+        Add node positional embeddings to the graphs' data.
         Takes as argument a function returning a nodewise positional embedding from a graph
         '''
         for g in self.dataset:
-            g.node_pe = node_pe(g)
+            g.node_pe = node_pe(g, update_stats=update_stats)
+        if standardize:
+            mean, std = node_pe.get_statistics()
+            for g in self.dataset:
+                g.node_pe = (g.node_pe - mean) / std.clamp(min=1e-6)
         self.use_node_pe = True
         self.node_pe_dimension = node_pe.get_embedding_dimension()
 
