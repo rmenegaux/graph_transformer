@@ -36,8 +36,8 @@ class MultiHeadAttentionLayer(nn.Module):
         self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
         self.K = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
         if self.use_edge_features:
-            self.E = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
-            # self.E2 = nn.Linear(in_dim_edges, 1, bias=use_bias)
+            # self.E = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
+            self.E2 = nn.Linear(in_dim_edges, 1, bias=use_bias)
             # self.E2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
 
         self.V = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
@@ -63,20 +63,19 @@ class MultiHeadAttentionLayer(nn.Module):
         K_h = K_h * scaling
 
         if self.use_edge_features:
-
-            E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
-            E = E.reshape(n_batch, num_nodes * num_nodes, self.num_heads, self.out_dim)#.transpose(1,2)
+            # E = self.E(e)   # [n_batch, num_nodes, num_nodes, out_dim * num_heads]
+            # E = E.view(n_batch, num_nodes * num_nodes, self.num_heads, self.out_dim)#.transpose(1,2)
             # E = E.reshape(n_batch, self.num_heads, num_nodes, num_nodes, self.out_dim)
-            E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
+            # E = E.view(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
 
-            # E2 = self.E2(e)
+            E2 = self.E2(e).view(n_batch, 1, num_nodes, num_nodes)
             # E2 = E2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
             # E = torch.exp(E.clamp(-5, 5))
 
             # attention(i, j) = sum(Q_i * K_j * E_ij)
-            scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)#.unsqueeze(-1)
-            # scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h).unsqueeze(-1)
-            # scores = scores + E
+            # scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)#.unsqueeze(-1)
+            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)# .unsqueeze(-1)
+            scores = scores + E2
         else:
             # attention(i, j) = sum(Q_i * K_j)
             scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)

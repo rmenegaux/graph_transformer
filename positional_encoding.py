@@ -4,6 +4,8 @@ import torch_geometric.utils as utils
 
 from scipy.linalg import expm
 
+def standardize(M, mean, std, threshold=1e-6):
+    return (M - mean) / std.clamp(min=threshold)
 
 def compute_RW_from_adjacency(A, add_self_loops=False):
     '''
@@ -92,22 +94,142 @@ class IterableNodePE(object):
         return node_pe
 
 
-class BaseAttentionPE(object):
+class BaseAttentionPEWrong_(object):
+    '''
+    Base class for computing edge positional encodings
+
+    FIXME: Implement a `process_dataset` method
+    '''
 
     def __init__(self, **parameters):
         '''
         Parameters that are applicable to any Attention PE
         '''
         self.zero_diag = parameters.get('zero_diag', False)
+        # Maybe keep track of running means rather than sums, to avoid overflow
+        # For now no problem as the quantities summed are << 1 (< n_nodes total per graph)
+        self._running_stats = {
+            'sum_off_diagonal': 0,
+            'sum_diagonal': 0,
+            'sum_squares_off_diagonal': 0,
+            'sum_squares_diagonal': 0,
+            'num_nodes': 0,
+        }
 
-    def __call__(self, graph):
+    def __call__(self, graph, update_stats=True):
         K = self.compute_attention_pe(graph)
-        if self.zero_diag == True:
-            I = torch.eye(*K.size()[:1])
-            if K.ndim == 3:
-                I = I.unsqueeze(-1)
-            K = K * (1 - I)
+
+        if self.zero_diag:
+            K.fill_diagonal_(0)
+
+        if update_stats:
+            self._running_stats['num_nodes'] += K.size(0)
+            diagonal = K.diagonal()
+            diagonal_sum = diagonal.sum(-1)
+            diagonal_squared_sum = (diagonal**2).sum(-1)
+            self._running_stats['sum_diagonal'] += diagonal_sum
+            self._running_stats['sum_squares_diagonal'] += diagonal_squared_sum
+            self._running_stats['sum_off_diagonal'] += K.sum((0, 1)) - diagonal_sum
+            self._running_stats['sum_squares_off_diagonal'] += (K**2).sum((0, 1)) - diagonal_squared_sum
+
         return K
+
+
+    def get_statistics(self):
+        num_nodes = self._running_stats['num_nodes']
+        if num_nodes == 0:
+            print('No statistics available')
+            return None
+        num_off_diagonal = num_nodes * (num_nodes - 1)
+        mean_diagonal = self._running_stats['sum_diagonal'] / num_nodes
+        mean_off_diagonal = self._running_stats['sum_off_diagonal'] / num_off_diagonal
+        var_diagonal = self._running_stats['sum_squares_diagonal'] / num_nodes - mean_diagonal**2
+        var_off_diagonal = self._running_stats['sum_squares_off_diagonal'] / num_off_diagonal - mean_off_diagonal**2
+        return {
+            'mean_diagonal': mean_diagonal,
+            'mean_off_diagonal': mean_off_diagonal,
+            'std_diagonal': torch.sqrt(var_diagonal),
+            'std_off_diagonal': torch.sqrt(var_off_diagonal),
+            'num_nodes': num_nodes,
+        }
+
+    def standardize(self, attention_pe):
+        '''
+        Return a standardized copy of `attention_pe`
+        '''
+        stats = self.get_statistics()
+        # Store a copy of the standardized diagonal
+        diagonal = standardize(attention_pe.diagonal().transpose(0, 1), stats['mean_diagonal'], stats['std_diagonal'])
+        # Standardize off diagonal elements
+        attention_pe_std = standardize(attention_pe, stats['mean_off_diagonal'], stats['std_off_diagonal'])
+        # Set diagonal
+        num_nodes = attention_pe.size(0)
+        attention_pe_std[range(num_nodes), range(num_nodes)] = diagonal
+
+        return attention_pe_std
+
+    def compute_attention_pe(self):
+        pass
+
+    def get_dimension(self):
+        '''
+        Returns the size of K's last dimension
+        '''
+        return 1
+
+class BaseAttentionPE(object):
+    '''
+    Base class for computing edge positional encodings
+
+    FIXME: Implement a `process_dataset` method
+    '''
+
+    def __init__(self, **parameters):
+        '''
+        Parameters that are applicable to any Attention PE
+        '''
+        self.zero_diag = parameters.get('zero_diag', False)
+        # Maybe keep track of running means rather than sums, to avoid overflow
+        # For now no problem as the quantities summed are << 1 (< n_nodes total per graph)
+        self._running_stats = {
+            'sum': 0,
+            'sum_squares': 0,
+            'num_edges': 0,
+        }
+
+    def __call__(self, graph, update_stats=True):
+        K = self.compute_attention_pe(graph)
+
+        if self.zero_diag:
+            K.fill_diagonal_(0)
+
+        if update_stats:
+            self._running_stats['num_edges'] += K.size(0)**2
+            self._running_stats['sum'] += K.sum((0, 1))
+            self._running_stats['sum_squares'] += (K**2).sum((0, 1))
+
+        return K
+
+    def get_statistics(self):
+        num_edges = self._running_stats['num_edges']
+        if num_edges == 0:
+            print('No statistics available')
+            return None
+        mean = self._running_stats['sum'] / num_edges
+        var = self._running_stats['sum_squares'] / num_edges - mean**2
+        return {
+            'mean': mean,
+            'std': torch.sqrt(var),
+            'num_edges': num_edges,
+        }
+
+    def standardize(self, attention_pe):
+        '''
+        Return a standardized copy of `attention_pe`
+        '''
+        stats = self.get_statistics()
+
+        return standardize(attention_pe, stats['mean'], stats['std'])
 
     def compute_attention_pe(self):
         pass

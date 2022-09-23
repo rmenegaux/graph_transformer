@@ -35,12 +35,15 @@ class GraphDataset(object):
         self.use_node_pe = True
         self.node_pe_dimension = node_pe.get_embedding_dimension()
 
-    def compute_attention_pe(self, attention_pe):
+    def compute_attention_pe(self, attention_pe, standardize=True, update_stats=True):
         '''
-        Takes as argument a function returning a nodewise positional embedding from a graph
+        Takes as argument a function returning an edgewise positional embedding from a graph
         '''
         for g in self.dataset:
-            g.attention_pe = attention_pe(g)
+            g.attention_pe = attention_pe(g, update_stats=update_stats)
+        if standardize:
+            for g in self.dataset:
+                g.attention_pe = attention_pe.standardize(g.attention_pe)
         self.use_attention_pe = True
         self.attention_pe_dim = attention_pe.get_dimension()
 

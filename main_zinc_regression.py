@@ -154,8 +154,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             net_params['use_attention_pe'] = False
         else:
             AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
-            for dset in [trainset, valset, testset]:
-                dset.compute_attention_pe(AttentionPE)
+            trainset.compute_attention_pe(AttentionPE, standardize=False, update_stats=True)
+            valset.compute_attention_pe(AttentionPE, standardize=False, update_stats=False)
+            testset.compute_attention_pe(AttentionPE, standardize=False, update_stats=False)
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
             if net_params['attention_pe_dim'] > 1:
                 net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']

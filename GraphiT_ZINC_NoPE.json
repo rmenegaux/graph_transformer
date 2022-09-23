@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QKE_lr7_meanpool_newstd_reinject/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+E2_lr7_sumpool_newstd_K/",
     
     "params": {
         "seed": 41,
@@ -31,7 +31,7 @@
         "n_heads": 8,
 
         "residual": true,
-        "readout": "mean",
+        "readout": "sum",
         "in_feat_dropout": 0.0,
         "dropout": 0.0,
         "feedforward": true,

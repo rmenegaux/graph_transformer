@@ -159,7 +159,7 @@ class GraphiTNet(nn.Module):
         if self.use_edge_features:
             e = self.embedding_e(e)
             # Combine edge type and edge positions
-            # e = e + self.positional_embedding_e(k_RW)
+            #e = e + self.positional_embedding_e(k_RW)
             e = torch.cat((e, self.positional_embedding_e(k_RW)), dim=-1)
 
         h = self.in_feat_dropout(h)
