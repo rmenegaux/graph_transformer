@@ -29,7 +29,7 @@ from tqdm import tqdm
 from transformer_net import GraphiTNet
 from data import GraphDataset
 from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmbeddings
-# from compute_gckn_pe import OneHotEdges, GCKNEncoding
+from compute_gckn_pe import OneHotEdges, GCKNEncoding
 
 
 """
