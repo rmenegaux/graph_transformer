@@ -37,8 +37,8 @@ class MultiHeadAttentionLayer(nn.Module):
         self.K = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
         if self.use_edge_features:
             # self.E = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
-            self.E2 = nn.Linear(in_dim_edges, 1, bias=use_bias)
-            # self.E2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
+            # self.E2 = nn.Linear(in_dim_edges, 1, bias=use_bias)
+            self.E2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
 
         self.V = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
 
@@ -54,9 +54,9 @@ class MultiHeadAttentionLayer(nn.Module):
 
         # Reshaping into [num_heads, num_nodes, feat_dim] to 
         # get projections for multi-head attention
-        Q_h = Q_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-        K_h = K_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-        V_h = V_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim).transpose(2, 1) # [n_batch, num_heads, num_nodes, out_dim]
+        Q_h = Q_h.view(n_batch, num_nodes, self.num_heads, self.out_dim)
+        K_h = K_h.view(n_batch, num_nodes, self.num_heads, self.out_dim)
+        V_h = V_h.view(n_batch, num_nodes, self.num_heads, self.out_dim) # [n_batch, num_heads, num_nodes, out_dim]
 
         # Normalize by sqrt(head dimension)
         scaling = float(self.out_dim) ** -0.5
@@ -68,14 +68,20 @@ class MultiHeadAttentionLayer(nn.Module):
             # E = E.reshape(n_batch, self.num_heads, num_nodes, num_nodes, self.out_dim)
             # E = E.view(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
 
-            E2 = self.E2(e).view(n_batch, 1, num_nodes, num_nodes)
-            # E2 = E2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
-            # E = torch.exp(E.clamp(-5, 5))
+            # E2 = self.E2(e).view(n_batch, 1, num_nodes, num_nodes)
+            E2 = self.E2(e).view(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
 
             # attention(i, j) = sum(Q_i * K_j * E_ij)
             # scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)#.unsqueeze(-1)
-            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)# .unsqueeze(-1)
-            scores = scores + E2
+            # scores = torch.einsum('bihk,bjhk->bijh', Q_h, K_h).unsqueeze(-1)
+
+            # attention(i, j) = sum(Q_i * K_j + E_ij)
+            # scores = torch.einsum('bihk,bjhk->bijh', Q_h, K_h)
+            # scores = scores + E2 # [n_batch, num_nodes, num_nodes, num_heads, out_dim]
+
+            # attention(i, j) = sum(Q_i * K_j + E_ij) (multi-dim)
+            scores = torch.einsum('bihk,bjhk->bijh', Q_h, K_h).unsqueeze(-1)
+            scores = scores + E2 # [n_batch, num_nodes, num_nodes, num_heads, out_dim]
         else:
             # attention(i, j) = sum(Q_i * K_j)
             scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
@@ -86,24 +92,22 @@ class MultiHeadAttentionLayer(nn.Module):
 
         # Make sure attention scores for padding are 0
         if mask is not None:
-            scores = scores * mask.view(-1, 1, num_nodes, 1) * mask.view(-1, 1, 1, num_nodes)
+            scores = scores * mask.view(-1, num_nodes, 1, 1, 1) * mask.view(-1, 1, num_nodes, 1, 1)
 
         if self.use_attention_pe:
-            # Introduce new dimension for the different heads
-            # k_RW = k_RW.unsqueeze(1)
-            # pass
-            scores = scores * k_RW
+            pass
+            # scores = scores * k_RW
         
-        softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
-        # softmax_denom = scores.sum(-2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
+        # softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
+        softmax_denom = scores.sum(2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
 
-        h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
+        # h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
         # h = torch.einsum('bhij,bhjk,bijhk->bhik', scores, V_h, E)
-        # h = torch.einsum('bhijk,bhjk->bhik', scores, V_h)
+        h = torch.einsum('bijhk,bjhk->bihk', scores, V_h)
         # Normalize scores
         h = h / softmax_denom
         # Concatenate attention heads
-        h = h.transpose(2, 1).reshape(-1, num_nodes, self.num_heads * self.out_dim) # [n_batch, num_nodes, out_dim * num_heads]
+        h = h.view(-1, num_nodes, self.num_heads * self.out_dim) # [n_batch, num_nodes, out_dim * num_heads]
 
         return h
     
@@ -157,7 +161,7 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm1_h = nn.BatchNorm1d(out_dim)
-            #self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
+            # self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
             self.instance_norm1_h = nn.InstanceNorm1d(out_dim)
@@ -228,7 +232,7 @@ class GraphiT_GT_Layer(nn.Module):
         '''
         Add dense layers to the self-attention
         '''
-        # # FFN for h
+        # FFN for h
         h_in2 = h # for second residual connection
         if self.layer_norm:
             h = self.layer_norm2_h(h)
@@ -303,10 +307,10 @@ class GraphiT_GT_Layer(nn.Module):
         if self.batch_norm:
             # Apparently have to do this double transpose for 3D input
             h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+            # h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
             # Set padding back to zero
             if mask is not None:
                 h = mask.unsqueeze(-1) * h
-            #h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
             # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)

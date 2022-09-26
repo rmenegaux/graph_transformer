@@ -128,6 +128,7 @@ class GraphiTNet(nn.Module):
                 self.embedding_e = BondEncoder(GT_hidden_dim, num_bond_type)
             else:
                 self.embedding_e = nn.Embedding(num_bond_type + 2, GT_hidden_dim//2, padding_idx=0)
+                self.batch_norm_e = nn.BatchNorm1d(net_params['attention_pe_dim'])
                 self.positional_embedding_e = nn.Linear(net_params['attention_pe_dim'], GT_hidden_dim//2, bias=False)
         
 
@@ -160,7 +161,9 @@ class GraphiTNet(nn.Module):
             e = self.embedding_e(e)
             # Combine edge type and edge positions
             #e = e + self.positional_embedding_e(k_RW)
-            e = torch.cat((e, self.positional_embedding_e(k_RW)), dim=-1)
+            # edge_positional_embedding = self.positional_embedding_e(self.batch_norm_e(k_RW))
+            edge_positional_embedding = self.positional_embedding_e(k_RW)
+            e = torch.cat((e, edge_positional_embedding), dim=-1)
 
         h = self.in_feat_dropout(h)
         
