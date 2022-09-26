@@ -56,7 +56,7 @@ from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
-ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC2'
+ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -126,6 +126,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         net_params['num_bond_type'] += 1
         for dset in [trainset, valset, testset]:
             dset.add_virtual_nodes(x_fill=net_params['num_atom_type'], edge_attr_fill=net_params['num_bond_type'])
+
+    if net_params['rings'] == True:
+        print('Adding ring information')
+        for dset in [trainset, valset, testset]:
+            dset.add_rings()
 
     # Initialize node positional embeddings
     print('Initializing node positional embeddings')

@@ -14,12 +14,25 @@ class GraphDataset(object):
 
         self.use_node_pe = False
         self.use_attention_pe = False
+        self._add_rings = False
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
         return self.dataset[index]
+
+    def add_rings(self, max_k=17):
+        for g in self.dataset:
+            g.rings = get_rings(g.edge_index, max_k=max_k)
+            g.ring_adj = torch.zeros((len(g.x), len(g.x)), dtype=int)
+            for ring in g.rings:
+                for i in ring:
+                    for j in ring:
+                        g.ring_adj[i, j] = 1
+                        g.ring_adj[j, i] = 1
+        self._add_rings = True
+
 
     def compute_node_pe(self, node_pe, standardize=True, update_stats=True):
         '''
@@ -79,6 +92,10 @@ class GraphDataset(object):
                 # adj = utils.to_dense_adj(edge_index).squeeze()
                 # FIXME: Adding 1 to the edge type here, to differentiate between padding and non-neighbors
                 padded_adj[i, :num_nodes, :num_nodes] = g.adj[:num_nodes, :num_nodes] + 1
+                # FIXME: Creating new edge type for ring connections (hard coded for 4 edge types)
+                if self._add_rings == True:
+                    padded_adj[i, :num_nodes, :num_nodes] += 4 * g.ring_adj
+
                 mask[i] = g.mask
                 if self.use_node_pe:
                     padded_p[i, :num_nodes] = g.node_pe
@@ -86,3 +103,41 @@ class GraphDataset(object):
                     attention_pe[i, :num_nodes, :num_nodes] = g.attention_pe
             return padded_x, padded_adj, padded_p, mask, attention_pe, default_collate(labels)
         return collate
+
+
+def get_rings(edge_index, max_k=7):
+    import graph_tool as gt
+    import graph_tool.topology as top
+    import networkx as nx
+
+    if isinstance(edge_index, torch.Tensor):
+        edge_index = edge_index.numpy()
+
+    edge_list = edge_index.T
+    graph_gt = gt.Graph(directed=False)
+    graph_gt.add_edge_list(edge_list)
+    gt.stats.remove_self_loops(graph_gt)
+    gt.stats.remove_parallel_edges(graph_gt)
+    # We represent rings with their original node ordering
+    # so that we can easily read out the boundaries
+    # The use of the `sorted_rings` set allows to discard
+    # different isomorphisms which are however associated
+    # to the same original ring – this happens due to the intrinsic
+    # symmetries of cycles
+    rings = set()
+    sorted_rings = set()
+    for k in range(3, max_k+1):
+        pattern = nx.cycle_graph(k)
+        pattern_edge_list = list(pattern.edges)
+        pattern_gt = gt.Graph(directed=False)
+        pattern_gt.add_edge_list(pattern_edge_list)
+        sub_isos = top.subgraph_isomorphism(pattern_gt, graph_gt, induced=True, subgraph=True,
+                                           generator=True)
+        sub_iso_sets = map(lambda isomorphism: tuple(isomorphism.a), sub_isos)
+        for iso in sub_iso_sets:
+            if tuple(sorted(iso)) not in sorted_rings:
+                rings.add(iso)
+                sorted_rings.add(tuple(sorted(iso)))
+
+    rings = list(rings)
+    return rings

@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+En_lr7_sumpool_newstd_noK/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+En_lr7_sumpool_newstd_rings/",
     
     "params": {
         "seed": 41,
@@ -60,6 +60,7 @@
         "use_edge_features": true,
         "update_edge_features": false,
 
-        "virtual_node": false
+        "virtual_node": false,
+        "rings": true
     }
 }
