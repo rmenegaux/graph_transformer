@@ -37,7 +37,7 @@ from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmb
 """
 def gpu_setup(use_gpu, gpu_id):
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)  
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
     if torch.cuda.is_available() and use_gpu:
         print('cuda available with GPU:',torch.cuda.get_device_name(0))
@@ -56,7 +56,7 @@ from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
-ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
+ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC2'
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -140,8 +140,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             else:
                 NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
             net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
-            for dset in [trainset, valset, testset]:
-                dset.compute_node_pe(NodePE)
+            trainset.compute_node_pe(NodePE, standardize=True, update_stats=True)
+            valset.compute_node_pe(NodePE, standardize=True, update_stats=False)
+            testset.compute_node_pe(NodePE, standardize=True, update_stats=False)
     else:
         net_params['use_node_pe'] = False
     # Pre-compute attention relative positional embeddings
@@ -153,8 +154,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             net_params['use_attention_pe'] = False
         else:
             AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
-            for dset in [trainset, valset, testset]:
-                dset.compute_attention_pe(AttentionPE)
+            trainset.compute_attention_pe(AttentionPE, standardize=False, update_stats=True)
+            valset.compute_attention_pe(AttentionPE, standardize=False, update_stats=False)
+            testset.compute_attention_pe(AttentionPE, standardize=False, update_stats=False)
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
             if net_params['attention_pe_dim'] > 1:
                 net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']
@@ -310,8 +312,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
     train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
     
-    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
-    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     print("Test MAE: {:.4f}".format(test_mae))
     print("Train MAE: {:.4f}".format(train_mae))
     print("Convergence Time (Epochs): {:.4f}".format(epoch))

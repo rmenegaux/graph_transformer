@@ -3,9 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.transforms import ToDense
-import torch.profiler as profiler
-
-from virtual_node import VirtualNode
+# import torch.profiler as profiler
 
 
 class GraphDataset(object):
@@ -23,26 +21,29 @@ class GraphDataset(object):
     def __getitem__(self, index):
         return self.dataset[index]
 
-    def add_virtual_nodes(self, x_fill=21, edge_attr_fill=4):
-        AddVirtualNode = VirtualNode()
-        for i, g in enumerate(self.dataset):
-            self.dataset[i] = AddVirtualNode(g, x_fill=x_fill, edge_attr_fill=edge_attr_fill)
-
-    def compute_node_pe(self, node_pe):
+    def compute_node_pe(self, node_pe, standardize=True, update_stats=True):
         '''
+        Add node positional embeddings to the graphs' data.
         Takes as argument a function returning a nodewise positional embedding from a graph
         '''
         for g in self.dataset:
-            g.node_pe = node_pe(g)
+            g.node_pe = node_pe(g, update_stats=update_stats)
+        if standardize:
+            mean, std = node_pe.get_statistics()
+            for g in self.dataset:
+                g.node_pe = (g.node_pe - mean) / std.clamp(min=1e-6)
         self.use_node_pe = True
         self.node_pe_dimension = node_pe.get_embedding_dimension()
 
-    def compute_attention_pe(self, attention_pe):
+    def compute_attention_pe(self, attention_pe, standardize=True, update_stats=True):
         '''
-        Takes as argument a function returning a nodewise positional embedding from a graph
+        Takes as argument a function returning an edgewise positional embedding from a graph
         '''
         for g in self.dataset:
-            g.attention_pe = attention_pe(g)
+            g.attention_pe = attention_pe(g, update_stats=update_stats)
+        if standardize:
+            for g in self.dataset:
+                g.attention_pe = attention_pe.standardize(g.attention_pe)
         self.use_attention_pe = True
         self.attention_pe_dim = attention_pe.get_dimension()
 
@@ -69,21 +70,15 @@ class GraphDataset(object):
             for i, g in enumerate(batch):
                 labels.append(g.y.view(-1))
                 num_nodes = len(g.x)
+                # FIXME: Adding 1 to the atom type here, to differentiate between atom 0 and padding
+                g.x = g.x + 1
                 # edge_index = utils.add_self_loops(batch[i].edge_index, None, num_nodes =  max_len)[0]
                 g = dense_transform(g)
-                # print("==================")
-                # print("g.x.squeeze().shape")
-                # print(g.x.squeeze().shape)
-                # print("g.adj.shape")
-                # print(g.adj.shape)
-                # print("padded_x[i]")
-                # print(padded_x[i].shape)
-                # print("padded_adj[i]")
-                # print(padded_adj[i].shape)
-                padded_x[i] = g.x#.squeeze()
+                padded_x[i] = g.x
 
                 # adj = utils.to_dense_adj(edge_index).squeeze()
-                padded_adj[i] = g.adj#.squeeze()
+                # FIXME: Adding 1 to the edge type here, to differentiate between padding and non-neighbors
+                padded_adj[i, :num_nodes, :num_nodes] = g.adj[:num_nodes, :num_nodes] + 1
                 mask[i] = g.mask
                 if self.use_node_pe:
                     padded_p[i, :num_nodes] = g.node_pe
