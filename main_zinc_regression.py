@@ -12,6 +12,7 @@ import time
 import random
 import glob
 import argparse, json
+import math
 
 import torch
 
@@ -55,7 +56,7 @@ from torch_geometric.data import Data
 from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
-save_run_tensorboard = True
+save_run_tensorboard = False
 ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
 
 """
@@ -223,10 +224,12 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     #         else:
     #             lr = decay_factor * s ** -.5
     #         return lr
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-                                                     factor=params['lr_reduce_factor'],
-                                                     patience=params['lr_schedule_patience'],
-                                                     verbose=True)
+
+    scheduler = cosine_with_warmup_scheduler(optimizer, params['warmup'], params['epochs'])
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+    #                                                  factor=params['lr_reduce_factor'],
+    #                                                  patience=params['lr_schedule_patience'],
+    #                                                  verbose=True)
     def lr_scheduler(s):
         if s < params['warmup']:
             lr = 1e-6 + s * (params['init_lr'] - 1e-6) / params['warmup']
@@ -274,7 +277,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                     writer.add_scalar('test/_mae', epoch_test_mae, epoch)
                     writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
-                        
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
                               train_loss=epoch_train_loss, val_loss=epoch_val_loss,
                               train_MAE=epoch_train_mae, val_MAE=epoch_val_mae,
@@ -297,8 +299,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                         os.remove(file)
 
                 # if params['warmup'] == False:
-                scheduler.step(epoch_val_loss)
-                if optimizer.param_groups[0]['lr'] < params['min_lr']:
+                # scheduler.step(epoch_val_loss)
+                scheduler.step()
+                if (optimizer.param_groups[0]['lr'] < params['min_lr']) and (epoch > params['warmup']):
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break
 
@@ -495,5 +498,50 @@ def main():
 
     # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)
-   
+
+
+# @register.register_scheduler('cosine_with_warmup')
+def cosine_with_warmup_scheduler(optimizer,
+                                 num_warmup_epochs, max_epoch):
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=num_warmup_epochs,
+        num_training_steps=max_epoch
+    )
+    return scheduler
+
+def get_cosine_schedule_with_warmup(
+        optimizer, num_warmup_steps, num_training_steps,
+        num_cycles=0.5, last_epoch=-1):
+    """
+    Implementation by Huggingface:
+    https://github.com/huggingface/transformers/blob/v4.16.2/src/transformers/optimization.py
+    Create a schedule with a learning rate that decreases following the values
+    of the cosine function between the initial lr set in the optimizer to 0,
+    after a warmup period during which it increases linearly between 0 and the
+    initial lr set in the optimizer.
+    Args:
+        optimizer ([`~torch.optim.Optimizer`]):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (`int`):
+            The total number of training steps.
+        num_cycles (`float`, *optional*, defaults to 0.5):
+            The number of waves in the cosine schedule (the defaults is to just
+            decrease from the max value to 0 following a half-cosine).
+        last_epoch (`int`, *optional*, defaults to -1):
+            The index of the last epoch when resuming training.
+    Return:
+        `torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return max(1e-6, float(current_step) / float(max(1, num_warmup_steps)))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
+
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
 main()

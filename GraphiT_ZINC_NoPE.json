@@ -7,19 +7,19 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+En_lr7_sumpool_newstd_rings/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+En_lr7_sumpool_newstd_rings_sqrt_p20_beta0_cosscheduler/",
     
     "params": {
         "seed": 41,
-        "epochs": 1000,
+        "epochs": 2000,
         "batch_size": 32,
-        "init_lr": 0.0007,
+        "init_lr": 0.001,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
         "min_lr": 1e-5,
-        "weight_decay": 0,
+        "weight_decay": 1e-5,
         "print_epoch_interval": 5,
-        "warmup": 0,
+        "warmup": 50,
         "max_time": 24
     },
     
@@ -34,6 +34,7 @@
         "readout": "sum",
         "in_feat_dropout": 0.0,
         "dropout": 0.0,
+        "attn_dropout": 0.5,
         "feedforward": true,
         "layer_norm": false,
         "batch_norm": true,
@@ -43,7 +44,7 @@
         "update_pos_enc": false,
         "node_pe_params": {
             "node_pe": "rand_walk",
-            "p_steps": 16
+            "p_steps": 20
         },
 
         "use_attention_pe": true,
@@ -51,8 +52,8 @@
             "attention_pe": "multi_RW",
             "multi_attention_pe": "per_layer",
             "zero_diag": false,
-            "p_steps": 16,
-            "beta": 0.25
+            "p_steps": 20,
+            "beta": 1
         },
         "last_layer_full_attention": true,
         "normalize_degree": false,

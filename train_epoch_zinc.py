@@ -22,10 +22,10 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
     gpu_mem = 0
     for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
         # import pdb; pdb.set_trace()
-        iteration = epoch * len(data_loader) + iter
-        if iteration < warmup:
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr_scheduler(iteration)
+        # iteration = epoch * len(data_loader) + iter
+        # if iteration < warmup:
+        #     for param_group in optimizer.param_groups:
+        #         param_group["lr"] = lr_scheduler(iteration)
 
         # with profiler.record_function("TRANSFER TO GPU"):
         padded_x = padded_x.to(device)

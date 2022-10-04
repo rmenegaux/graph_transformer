@@ -95,6 +95,10 @@ class GraphDataset(object):
                 # FIXME: Creating new edge type for ring connections (hard coded for 4 edge types)
                 if self._add_rings == True:
                     padded_adj[i, :num_nodes, :num_nodes] += 4 * g.ring_adj
+                # Adding a special edge type (2) for the diagonal
+                padded_adj[i, :num_nodes, :num_nodes] += (g.adj[:num_nodes, :num_nodes] > 0)
+                padded_adj[i, :num_nodes, :num_nodes].fill_diagonal_(2)
+
 
                 mask[i] = g.mask
                 if self.use_node_pe:

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from batchnorm import MaskedBatchNorm1d
+from batchrenorm import BatchRenorm1d
 
 import numpy as np
 
@@ -25,7 +26,8 @@ def combine_h_p(h, p, operation='sum'):
 
 class MultiHeadAttentionLayer(nn.Module):
     def __init__(self, in_dim, in_dim_edges, out_dim, num_heads,
-                 use_bias=False, use_attention_pe=True, use_edge_features=False):
+                 use_bias=False, use_attention_pe=True, use_edge_features=False,
+                 attn_dropout=0.0):
         super().__init__()
         
         self.out_dim = out_dim
@@ -41,6 +43,8 @@ class MultiHeadAttentionLayer(nn.Module):
             self.E2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
 
         self.V = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
+
+        self.attn_dropout = nn.Dropout(p=attn_dropout)
 
         
     def forward(self, h, e, k_RW=None, mask=None, adj=None):
@@ -91,15 +95,21 @@ class MultiHeadAttentionLayer(nn.Module):
         # scores = torch.exp(scores - scores.amax(dim=(-2, -1), keepdim=True))
 
         # Make sure attention scores for padding are 0
-        if mask is not None:
-            scores = scores * mask.view(-1, num_nodes, 1, 1, 1) * mask.view(-1, 1, num_nodes, 1, 1)
+        attn_mask = mask.view(-1, num_nodes, 1, 1, 1) * mask.view(-1, 1, num_nodes, 1, 1)
+        if attn_mask is not None:
+            scores = scores * attn_mask
+            # scores = scores * mask.view(-1, num_nodes, 1, 1, 1) * mask.view(-1, 1, num_nodes, 1, 1)
 
         if self.use_attention_pe:
             pass
+            # scores = scores * adj.view(-1, num_nodes, num_nodes, 1, 1) 
             # scores = scores * k_RW
         
         # softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
         softmax_denom = scores.sum(2).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, out_dim]
+
+        attn_mask = self.attn_dropout(attn_mask.float())
+        scores = scores * attn_mask
 
         # h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
         # h = torch.einsum('bhij,bhjk,bijhk->bhik', scores, V_h, E)
@@ -139,7 +149,7 @@ class GraphiT_GT_Layer(nn.Module):
         self.update_pos_enc = layer_params['update_pos_enc']
 
         attention_params = {
-            param: layer_params[param] for param in ['use_bias', 'use_attention_pe', 'use_edge_features']
+            param: layer_params[param] for param in ['use_bias', 'use_attention_pe', 'use_edge_features', 'attn_dropout']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
         in_dim_h = in_dim*2 if (self.use_node_pe == 'concat') else in_dim
@@ -161,6 +171,7 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm1_h = nn.BatchNorm1d(out_dim)
+            # self.batch_norm1_h = BatchRenorm1d(out_dim)
             # self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
@@ -175,6 +186,7 @@ class GraphiT_GT_Layer(nn.Module):
             self.layer_norm2_h = nn.LayerNorm(out_dim)
             
         if self.batch_norm:
+            # self.batch_norm2_h = BatchRenorm1d(out_dim)
             self.batch_norm2_h = nn.BatchNorm1d(out_dim)
             # self.batch_norm2_h = MaskedBatchNorm1d(out_dim)
 
@@ -190,6 +202,7 @@ class GraphiT_GT_Layer(nn.Module):
             if self.batch_norm and self.update_edge_features:
                 self.batch_norm_e = nn.BatchNorm1d(out_dim)
 
+
     def forward_edges(self, h, e):
         '''
         Update edge features
@@ -202,9 +215,9 @@ class GraphiT_GT_Layer(nn.Module):
         e = B1_h + B2_h + E12
         if self.batch_norm:
             n_batch, n_nodes, _, n_embedding = e.size()
-            e = e.reshape(n_batch, n_nodes * n_nodes, n_embedding).transpose(1,2)
+            e = e.view(n_batch, n_nodes * n_nodes, n_embedding).transpose(1,2)
             e = self.batch_norm_e(e)
-            e = e.transpose(1,2).reshape(n_batch, n_nodes, n_nodes, n_embedding)
+            e = e.transpose(1,2).view(n_batch, n_nodes, n_nodes, n_embedding)
         # e = self.batch_norm_e(e)
         e = e_in + F.relu(e)
         # e = e_in + torch.tanh(e)
