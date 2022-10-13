@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch_geometric.utils import to_dense_batch
+
 from batchnorm import MaskedBatchNorm1d
 from batchrenorm import BatchRenorm1d
 
@@ -85,7 +87,9 @@ class MultiHeadAttentionLayer(nn.Module):
 
             # attention(i, j) = sum(Q_i * K_j + E_ij) (multi-dim)
             scores = torch.einsum('bihk,bjhk->bijh', Q_h, K_h).unsqueeze(-1)
-            scores = scores + E2 # [n_batch, num_nodes, num_nodes, num_heads, out_dim]
+            # scores = Q_h.unsqueeze(1) + K_h.unsqueeze(2)
+            scores = scores + E2
+            scores *= float(2) ** -0.5 # [n_batch, num_nodes, num_nodes, num_heads, out_dim]
         else:
             # attention(i, j) = sum(Q_i * K_j)
             scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
@@ -179,8 +183,10 @@ class GraphiT_GT_Layer(nn.Module):
         
         # FFN for h
         if self.feedforward:
-            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2, bias=False)
-            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim, bias=False)
+            # self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2, bias=False)
+            # self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim, bias=False)
+            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2, bias=True)
+            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim, bias=True)
 
         if self.layer_norm:
             self.layer_norm2_h = nn.LayerNorm(out_dim)
@@ -261,7 +267,8 @@ class GraphiT_GT_Layer(nn.Module):
         #     h = self.layer_norm2_h(h)
 
         if self.batch_norm:
-            h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
+            # h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
+            h = self.batch_norm2_h(h)
             # h = self.batch_norm2_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
@@ -317,26 +324,41 @@ class GraphiT_GT_Layer(nn.Module):
         # if self.layer_norm:
         #     h = self.layer_norm1_h(h)
 
+        # Reformat to avoid padding issues in batch norm
+        h_pyg = h.view(-1, self.out_channels)
+        h_pyg = h_pyg[mask.flatten()]
+        # h_pyg = torch.masked_select(h, mask.unsqueeze(-1)) # This flattens h completely
+        batch = mask * torch.arange(mask.size(0), device=mask.device).unsqueeze(-1)
+        batch = torch.masked_select(batch, mask)
+
         if self.batch_norm:
-            # Apparently have to do this double transpose for 3D input
-            h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
-            # h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
-            # Set padding back to zero
-            if mask is not None:
-                h = mask.unsqueeze(-1) * h
+            h_pyg = self.batch_norm1_h(h_pyg)
 
-        if self.instance_norm:
-            # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)
-            h = self.instance_norm1_h(h)
+        h_pyg = self.feed_forward_block(h_pyg, mask=mask)
 
-        if self.feedforward:
-            h = self.feed_forward_block(h, mask=mask)
-            # Set padding back to zero
-            if mask is not None:
-                h = mask.unsqueeze(-1) * h
+        # Reshape input into (n_batch, max_nodes, out_dim)
+        h, mask = to_dense_batch(h_pyg, batch)
+
+        # if self.batch_norm:
+        #     # Apparently have to do this double transpose for 3D input
+        #     h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+        #     # h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
+        #     # Set padding back to zero
+        #     if mask is not None:
+        #         h = mask.unsqueeze(-1) * h
+
+        # if self.instance_norm:
+        #     # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)
+        #     h = self.instance_norm1_h(h)
+
+        # if self.feedforward:
+        #     h = self.feed_forward_block(h, mask=mask)
+        #     # Set padding back to zero
+        #     if mask is not None:
+        #         h = mask.unsqueeze(-1) * h
                 
-        if self.use_node_pe and self.update_pos_enc:
-            p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)
+        # if self.use_node_pe and self.update_pos_enc:
+        #     p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)
 
         return h, p, e
         

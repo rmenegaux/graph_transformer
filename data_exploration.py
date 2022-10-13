@@ -51,7 +51,7 @@ attention_pe_params = {
             "multi_attention_pe": "per_layer",
             "zero_diag": False,
             "p_steps": 16,
-            "beta": 0.25
+            "beta": 1
         }
 AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
 #for dset in [trainset, valset, testset]:
@@ -65,6 +65,9 @@ for i, graph in enumerate(valset.dataset):
     num_nodes.append(graph.x.size(0))
     attention_pe_list.append(graph.attention_pe)
 AttentionPE.get_statistics()
+ipdb.set_trace()
+AttentionPE.standardize(graph.attention_pe)
+
 
 # graph_dataframe.group
 
@@ -80,60 +83,59 @@ AttentionPE.get_statistics()
 #         node_pe.append(graph.node_pe)
 #         attention_pe
 
-def get_rings(edge_index, max_k=7):
-    if isinstance(edge_index, torch.Tensor):
-        edge_index = edge_index.numpy()
+# def get_rings(edge_index, max_k=7):
+#     if isinstance(edge_index, torch.Tensor):
+#         edge_index = edge_index.numpy()
 
-    edge_list = edge_index.T
-    graph_gt = gt.Graph(directed=False)
-    graph_gt.add_edge_list(edge_list)
-    gt.stats.remove_self_loops(graph_gt)
-    gt.stats.remove_parallel_edges(graph_gt)
-    # We represent rings with their original node ordering
-    # so that we can easily read out the boundaries
-    # The use of the `sorted_rings` set allows to discard
-    # different isomorphisms which are however associated
-    # to the same original ring – this happens due to the intrinsic
-    # symmetries of cycles
-    rings = set()
-    sorted_rings = set()
-    for k in range(3, max_k+1):
-        pattern = nx.cycle_graph(k)
-        pattern_edge_list = list(pattern.edges)
-        pattern_gt = gt.Graph(directed=False)
-        pattern_gt.add_edge_list(pattern_edge_list)
-        sub_isos = top.subgraph_isomorphism(pattern_gt, graph_gt, induced=True, subgraph=True,
-                                           generator=True)
-        sub_iso_sets = map(lambda isomorphism: tuple(isomorphism.a), sub_isos)
-        for iso in sub_iso_sets:
-            if tuple(sorted(iso)) not in sorted_rings:
-                rings.add(iso)
-                sorted_rings.add(tuple(sorted(iso)))
-                # Remove rings that are composed of 2 smaller rings
-    small_rings = set()
-    small_rings.update(rings)
-    # for a in rings:
-    #     set_a = set(a)
-    #     for b in rings:
-    #         set_b = set(b)
-    #         if set_b != set_a:
-    #             for c in rings:
-    #                 set_c = set(c)
-    #                 if set_c != set_b and set_c != set_a:
-    #                     d, e, f = sorted([set_a, set_b, set_c], key=len)
-    #                     if e != f and d.union(e).issubset(f):
-    #                         small_rings.discard(tuple(sorted(f)))
-    rings = list(small_rings)
-    return rings
+#     edge_list = edge_index.T
+#     graph_gt = gt.Graph(directed=False)
+#     graph_gt.add_edge_list(edge_list)
+#     gt.stats.remove_self_loops(graph_gt)
+#     gt.stats.remove_parallel_edges(graph_gt)
+#     # We represent rings with their original node ordering
+#     # so that we can easily read out the boundaries
+#     # The use of the `sorted_rings` set allows to discard
+#     # different isomorphisms which are however associated
+#     # to the same original ring – this happens due to the intrinsic
+#     # symmetries of cycles
+#     rings = set()
+#     sorted_rings = set()
+#     for k in range(3, max_k+1):
+#         pattern = nx.cycle_graph(k)
+#         pattern_edge_list = list(pattern.edges)
+#         pattern_gt = gt.Graph(directed=False)
+#         pattern_gt.add_edge_list(pattern_edge_list)
+#         sub_isos = top.subgraph_isomorphism(pattern_gt, graph_gt, induced=True, subgraph=True,
+#                                            generator=True)
+#         sub_iso_sets = map(lambda isomorphism: tuple(isomorphism.a), sub_isos)
+#         for iso in sub_iso_sets:
+#             if tuple(sorted(iso)) not in sorted_rings:
+#                 rings.add(iso)
+#                 sorted_rings.add(tuple(sorted(iso)))
+#                 # Remove rings that are composed of 2 smaller rings
+#     small_rings = set()
+#     small_rings.update(rings)
+#     # for a in rings:
+#     #     set_a = set(a)
+#     #     for b in rings:
+#     #         set_b = set(b)
+#     #         if set_b != set_a:
+#     #             for c in rings:
+#     #                 set_c = set(c)
+#     #                 if set_c != set_b and set_c != set_a:
+#     #                     d, e, f = sorted([set_a, set_b, set_c], key=len)
+#     #                     if e != f and d.union(e).issubset(f):
+#     #                         small_rings.discard(tuple(sorted(f)))
+#     rings = list(small_rings)
+#     return rings
 
-rings = get_rings(graph.edge_index)
-graph_nx = torch_geometric.utils.to_networkx(graph, to_undirected=True)
+# rings = get_rings(graph.edge_index)
+# graph_nx = torch_geometric.utils.to_networkx(graph, to_undirected=True)
 
-import matplotlib.pyplot as plt
-plt.figure()
-nx.draw(graph_nx, with_labels=True)
-plt.savefig("last_graph.png")
+# import matplotlib.pyplot as plt
+# plt.figure()
+# nx.draw(graph_nx, with_labels=True)
+# plt.savefig("last_graph.png")
 
-ipdb.set_trace()
-AttentionPE.standardize(graph.attention_pe)
+
 print('finished')

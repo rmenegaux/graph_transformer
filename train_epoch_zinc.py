@@ -44,6 +44,7 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
 
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         epoch_loss += loss.detach().item()
         epoch_train_mae += MAE(batch_scores, batch_targets)

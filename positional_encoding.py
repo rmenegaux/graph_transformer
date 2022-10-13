@@ -17,6 +17,18 @@ def compute_RW_from_adjacency(A, add_self_loops=False):
     D = A.sum(dim=-1, keepdim=True)
     D[D == 0] = 1 # Prevent any division by 0 errors
     return A / D # A D^-1
+
+def compute_normalized_RW_from_adjacency(A, add_self_loops=False, epsilon=0.125):
+    '''
+    Returns the random walk transition matrix for an adjacency matrix A
+    '''
+    if add_self_loops:
+        I = torch.eye(*A.size(), out=torch.empty_like(A))
+        A = I + A
+    D = A.sum(dim=-1)
+    D[D == 0] = 1 # Prevent any division by 0 errors
+    D = D.pow(-epsilon)
+    return A * D.view(-1, 1) * D.view(1, -1) # D_eps A D_eps
     
 def get_laplacian_from_adjacency(A):
     RW = compute_RW_from_adjacency(A)
@@ -309,6 +321,7 @@ class MultiRWAttentionPE(BaseAttentionPE):
     def compute_attention_pe(self, graph):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         k_RW_0 = RW_kernel_from_adjacency(A, beta=self.beta, p_steps=1)
+        # k_RW_0 = compute_normalized_RW_from_adjacency(A)
         k_RW_power = k_RW_0
         k_RW_all_powers = [k_RW_0]
         for i in range(self.p_steps-1):

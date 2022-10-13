@@ -56,7 +56,7 @@ from torch_geometric.data import Data
 from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
-save_run_tensorboard = False
+save_run_tensorboard = True
 ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
 
 """
@@ -225,11 +225,13 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     #             lr = decay_factor * s ** -.5
     #         return lr
 
-    scheduler = cosine_with_warmup_scheduler(optimizer, params['warmup'], params['epochs'])
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-    #                                                  factor=params['lr_reduce_factor'],
-    #                                                  patience=params['lr_schedule_patience'],
-    #                                                  verbose=True)
+    if params['scheduler'] == 'cosine':
+        scheduler = cosine_with_warmup_scheduler(optimizer, params['warmup'], params['epochs'])
+    else:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+                                                     factor=params['lr_reduce_factor'],
+                                                     patience=params['lr_schedule_patience'],
+                                                     verbose=True)
     def lr_scheduler(s):
         if s < params['warmup']:
             lr = 1e-6 + s * (params['init_lr'] - 1e-6) / params['warmup']
@@ -299,8 +301,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                         os.remove(file)
 
                 # if params['warmup'] == False:
-                # scheduler.step(epoch_val_loss)
-                scheduler.step()
+                if params['scheduler'] == 'cosine':
+                    scheduler.step()
+                else:
+                    scheduler.step(epoch_val_loss)
+                # 
                 if (optimizer.param_groups[0]['lr'] < params['min_lr']) and (epoch > params['warmup']):
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break

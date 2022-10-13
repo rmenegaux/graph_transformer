@@ -7,16 +7,17 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_EdgeRWijCat_QK+En_lr7_sumpool_newstd_rings_sqrt_p20_beta0_cosscheduler/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_QK+En_lr7_sumpool_DotAtt_p20_beta0_cosinescheduler_rings_newBN/",
     
     "params": {
         "seed": 41,
         "epochs": 2000,
         "batch_size": 32,
         "init_lr": 0.001,
+        "scheduler": "cosine",
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
-        "min_lr": 1e-5,
+        "min_lr": 1e-6,
         "weight_decay": 1e-5,
         "print_epoch_interval": 5,
         "warmup": 50,
